@@ -1,0 +1,30 @@
+# Declarative Automation Bundle for GeoGenie Network Atlas.
+#
+# The provisioning notebook is the single source of truth — it creates and
+# configures ALL resources imperatively (Lakebase project, PostGIS schema,
+# UC federated catalog, Genie Space, and Databricks App with resource grants).
+#
+# This bundle declares a job that runs that notebook on demand:
+#   bundle deploy  → registers the provisioning job
+#   bundle run geogenie_provision  → runs the notebook (creates/updates everything)
+#
+# The app is NOT declared here to avoid conflicts — the notebook handles app
+# creation, resource attachment, SP grants, and deployment.
+bundle:
+  name: geogenie-network-atlas
+
+resources:
+  jobs:
+    geogenie_provision:
+      name: "GeoGenie Network Atlas — Provision"
+      tasks:
+        - task_key: provision
+          notebook_task:
+            notebook_path: ./notebooks/provision_and_setup.py
+            base_parameters:
+              lakebase_instance: "geogenie-network-atlas-db"
+              federated_catalog: "geogenie_network_atlas"
+
+targets:
+  dev:
+    default: true

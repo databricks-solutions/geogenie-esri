@@ -1,0 +1,6 @@
+# GeoGenie Network Atlas — Databricks App config
+command: ["python", "app.py"]
+
+env:
+  - name: GENIE_SPACE_ID
+    valueFrom: genie-space

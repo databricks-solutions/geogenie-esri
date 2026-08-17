@@ -1,0 +1,5 @@
+fastapi~=0.115
+uvicorn~=0.34
+databricks-sdk>=0.120  # >=0.120 required for Genie download_message_attachment_visualization
+psycopg[binary]~=3.2
+pydantic~=2.12

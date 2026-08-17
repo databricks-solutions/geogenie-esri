@@ -1,5 +1,9 @@
 *conf*.json
-.DS_Store
-__pycache__
-.idea/
+config.local.json
 .env
+.venv/
+__pycache__/
+*.pyc
+.databricks/
+.idea/
+.DS_Store

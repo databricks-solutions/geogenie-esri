@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GeoGenie Network Atlas</title>
+<link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/dark/main.css" />
+<!-- h3-js MUST load before the ArcGIS SDK: the SDK installs a global AMD define(),
+     and h3-js's UMD wrapper would otherwise register as an anonymous AMD module,
+     colliding with Dojo's loader (multipleDefine on esri/Map -> blank map). Loading
+     it first makes it attach cleanly to window.h3. -->
+<script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+<script src="https://js.arcgis.com/4.29/"></script>
+<style>
+  :root {
+    --ink:#0b1220; --panel:#101a2e; --panel-2:#16233d; --line:#24344f;
+    --text:#e8eef7; --muted:#8fa3bf; --pulse:#38e8b0; --warn:#f4b23e; --bad:#f0645a;
+    --accent:#b18cff;
+    --mono:"SF Mono","Cascadia Mono",Consolas,monospace;
+  }
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--text);
+    font:15px/1.5 "Segoe UI",system-ui,sans-serif;}
+  #viewDiv{position:absolute;inset:0;}
+  header{position:absolute;top:16px;left:16px;z-index:10;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:10px 16px;display:flex;
+    align-items:center;gap:14px;}
+  header .dot{width:9px;height:9px;border-radius:50%;background:var(--pulse);
+    box-shadow:0 0 8px var(--pulse);}
+  header h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.02em;}
+  header span{color:var(--muted);font-size:12.5px;}
+  #controls{position:absolute;top:16px;right:16px;z-index:10;display:flex;gap:8px;}
+  #drawBtn{cursor:pointer;background:var(--pulse);color:#06281d;border:0;border-radius:10px;
+    font:600 14px/1 inherit;padding:13px 18px;display:flex;gap:8px;align-items:center;}
+  #drawBtn.active{background:var(--bad);color:#fff;}
+  #sectorBtn,#genieBtn{cursor:pointer;background:var(--panel);color:var(--muted);
+    border:1px solid var(--line);border-radius:10px;font:600 14px/1 inherit;padding:13px 16px;}
+  #sectorBtn.active{background:var(--accent);color:#160a2e;border-color:var(--accent);}
+  #genieBtn.active{background:#4aa3ff;color:#04182e;border-color:#4aa3ff;}
+  #legend{position:absolute;left:16px;bottom:22px;z-index:10;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:12.5px;
+    color:var(--muted);}
+  #legend b{color:var(--text);font-weight:600;}
+  #legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;
+    vertical-align:middle;}
+  #panel{position:absolute;left:16px;top:78px;z-index:10;width:330px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:none;
+    max-height:calc(100vh - 200px);overflow-y:auto;}
+  #panel.show{display:block;}
+  #panel h2{margin:0 0 2px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);font-weight:600;}
+  #tier{font-size:26px;font-weight:700;margin:0 0 4px;}
+  #tier.BUILD{color:var(--pulse);} #tier.MARGINAL{color:var(--warn);}
+  #tier.PASS{color:var(--bad);} #tier.NO_DATA{color:var(--muted);}
+  #coverage{font-size:12.5px;color:var(--muted);margin:0 0 10px;}
+  .row{display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);
+    font-size:13.5px;}
+  .row b{font-family:var(--mono);font-weight:600;}
+  .row span{color:var(--muted);}
+  #hint{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);z-index:10;
+    background:var(--panel-2);border:1px solid var(--line);padding:8px 16px;border-radius:999px;
+    font-size:13px;color:var(--muted);display:none;}
+  #hint.show{display:block;}
+  /* Genie chat panel */
+  #genie{position:absolute;right:16px;bottom:22px;z-index:11;width:560px;max-width:calc(100vw - 32px);
+    /* Frosted glass: translucent so the network shows through, with a blur so
+       the busy basemap behind doesn't hurt text/table legibility. */
+    background:rgba(16,26,46,0.82);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:none;
+    flex-direction:column;gap:11px;max-height:78vh;}
+  #genie.show{display:flex;}
+  #genie h2{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);font-weight:600;}
+  #genieScope{font-size:12px;color:var(--muted);}
+  #genieScope b{color:#4aa3ff;}
+  /* Clickable sample-question chips */
+  #genieSamples{display:flex;flex-wrap:wrap;gap:6px;}
+  .sample{cursor:pointer;background:var(--panel-2);border:1px solid var(--line);
+    border-radius:999px;color:var(--text);font-size:12px;padding:6px 11px;line-height:1.3;
+    transition:background .12s,border-color .12s;display:inline-flex;align-items:center;gap:6px;}
+  .sample:hover{background:#1c2c49;border-color:#4aa3ff;}
+  .sample-badge{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+    padding:2px 6px;border-radius:999px;line-height:1;}
+  .sample-st .sample-badge{background:rgba(56,232,176,0.18);color:var(--pulse);}
+  .sample-h3 .sample-badge{background:rgba(74,163,255,0.18);color:#4aa3ff;}
+  #genieLog{overflow-y:auto;display:flex;flex-direction:column;gap:9px;flex:1;min-height:60px;}
+  .msg{padding:9px 12px;border-radius:9px;font-size:13.5px;line-height:1.5;}
+  .msg.you{background:var(--panel-2);align-self:flex-end;max-width:85%;}
+  .msg.ai{background:#0e1830;border:1px solid var(--line);max-width:100%;}
+  /* Rich AI answer formatting */
+  .msg.ai .ai-text{white-space:normal;}
+  .msg.ai .ai-text b{color:var(--text);}
+  .msg.ai table{border-collapse:collapse;margin:8px 0 2px;font-size:12.5px;width:100%;}
+  .msg.ai th,.msg.ai td{border:1px solid var(--line);padding:5px 9px;text-align:left;}
+  .msg.ai th{background:var(--panel-2);color:var(--muted);font-weight:600;
+    text-transform:uppercase;font-size:11px;letter-spacing:.03em;}
+  .msg.ai td{font-family:var(--mono);}
+  .msg.ai .ai-chart{max-width:100%;margin:8px 0 2px;border-radius:8px;
+    border:1px solid var(--line);background:#fff;}
+  .clear-genie{cursor:pointer;color:#4aa3ff;user-select:none;margin-left:4px;}
+  .clear-genie:hover{text-decoration:underline;}
+  .clear-genie.done{color:var(--muted);cursor:default;text-decoration:none;pointer-events:none;}
+  .genie-legend{display:flex;flex-wrap:wrap;align-items:center;gap:5px 12px;
+    margin:5px 0 2px;font-size:11.5px;color:var(--muted);}
+  .genie-legend b{color:var(--text);font-weight:600;}
+  .genie-legend .lg{display:inline-flex;align-items:center;gap:5px;}
+  .genie-legend .lg i{width:10px;height:10px;border-radius:50%;
+    box-shadow:0 0 0 1.5px rgba(255,255,255,.85);}
+  .genie-legend .lg-ramp{display:inline-block;width:70px;height:9px;border-radius:5px;
+    background:linear-gradient(90deg,rgb(219,234,254),rgb(30,64,175));
+    box-shadow:0 0 0 1px var(--line);}
+  .sql-toggle{cursor:pointer;color:#4aa3ff;font-size:12px;margin-top:8px;
+    display:inline-flex;align-items:center;gap:5px;user-select:none;}
+  .sql-toggle::before{content:"▸";font-size:10px;transition:transform .12s;}
+  .sql-toggle.open::before{transform:rotate(90deg);}
+  .msg.ai pre{margin:6px 0 0;font:11.5px/1.45 var(--mono);color:var(--muted);
+    background:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 11px;
+    overflow-x:auto;display:none;white-space:pre;}
+  .msg.ai pre.show{display:block;}
+  #genieForm{display:flex;gap:8px;}
+  #genieInput{flex:1;background:var(--ink);border:1px solid var(--line);border-radius:8px;
+    color:var(--text);padding:10px 12px;font:14px inherit;}
+  #genieSend{cursor:pointer;background:#4aa3ff;color:#04182e;border:0;border-radius:8px;
+    font:600 14px/1 inherit;padding:0 16px;}
+</style>
+</head>
+<body>
+<div id="viewDiv"></div>
+
+<header><div class="dot"></div><h1>GeoGenie Network Atlas</h1><span>Dallas — assets · expansion · ask</span></header>
+
+<div id="controls">
+  <button id="genieBtn">Ask Genie</button>
+  <button id="sectorBtn">Sectors: off</button>
+  <button id="drawBtn">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M4 14c0-5 4-9 9-9 4 0 7 2.5 7 6 0 4-4 5-7 5-2.5 0-4 1-4 3 0 1.5 1.2 2.5 3 2.5" stroke-linecap="round"/>
+    </svg>
+    <span id="drawLabel">Draw area</span>
+  </button>
+</div>
+
+<div id="hint">Click and drag to lasso an area — release to analyze (and scope Genie to it)</div>
+
+<div id="legend">
+  <div><span class="sw" style="background:#38e8b0"></span>node active &nbsp;
+       <span class="sw" style="background:#f0645a"></span>node fault</div>
+  <div><span class="sw" style="background:#f6a623"></span>trunk &nbsp;
+       <span class="sw" style="background:#4aa3ff"></span>distribution &nbsp;
+       <span class="sw" style="background:#b18cff"></span>antenna sector</div>
+  <div><span class="sw" style="background:#40e0a8"></span>site &nbsp;
+       <span class="sw" style="background:#be96ff"></span>antenna</div>
+</div>
+
+<div id="panel">
+  <h2>Expansion verdict</h2>
+  <div id="tier">—</div>
+  <div id="coverage"></div>
+  <div id="metrics"></div>
+</div>
+
+<div id="genie">
+  <h2>Ask Genie</h2>
+  <div id="genieScope">Scope: <b>whole map</b> — draw an area to scope questions to it.</div>
+  <div id="genieSamples"></div>
+  <div id="genieLog"></div>
+  <form id="genieForm">
+    <input id="genieInput" placeholder="e.g. how many C-Band antennas are here?" autocomplete="off" />
+    <button id="genieSend" type="submit">Ask</button>
+  </form>
+</div>
+
+<script>
+require([
+  "esri/Map", "esri/views/MapView", "esri/layers/FeatureLayer",
+  "esri/layers/GraphicsLayer", "esri/widgets/Sketch/SketchViewModel",
+  "esri/Graphic", "esri/geometry/support/webMercatorUtils", "esri/core/reactiveUtils",
+  "esri/renderers/HeatmapRenderer", "esri/geometry/Extent"
+], (Map, MapView, FeatureLayer, GraphicsLayer, SketchViewModel, Graphic, wmUtils, reactiveUtils, HeatmapRenderer, Extent) => {
+
+  const drawLayer = new GraphicsLayer();
+  // Genie's geographic answers are drawn here natively (points / H3 hexes),
+  // instead of showing Genie's server-rendered map PNG — that export loses its
+  // Mapbox basemap tiles, so the points land on a blank gray canvas. Rendering
+  // on our own ArcGIS basemap keeps map answers interactive and on-brand.
+  const genieLayer = new GraphicsLayer();
+  const map = new Map({ basemap: "dark-gray-vector", layers: [drawLayer] });
+  const view = new MapView({
+    container: "viewDiv", map,
+    center: [-96.84, 32.78], zoom: 13,   // initial guess; fitToNetwork() reframes on load
+    constraints: { snapToZoom: false }
+  });
+
+  // The most recent drawn region, used to scope Genie two ways:
+  //   regionH3  — H3 res-9 cells for the approximate `h3_cell IN (...)` path
+  //   regionWKT — polygon WKT for the exact ST_Contains(...) path
+  let regionH3 = null;
+  let regionWKT = null;
+
+  // ---- Layer definitions: renderer + popup + geometry type per asset layer ----
+  const SECTOR_FILL = [177, 140, 255, 0.06], SECTOR_LINE = [177, 140, 255, 0.55];
+
+  const LAYERS = {
+    demand: {   // H3-aggregated market demand, rendered as a heatmap weighted by homes_passed
+      geometryType: "point",
+      fields: [
+        { name: "h3_cell", type: "string" }, { name: "homes_passed", type: "integer" },
+        { name: "biz_count", type: "integer" }, { name: "avg_arpu", type: "double" },
+        { name: "est_build_cost_usd", type: "double" }
+      ],
+      renderer: new HeatmapRenderer({
+        field: "homes_passed",
+        radius: 18,
+        maxDensity: 0.045,
+        minDensity: 0,
+        colorStops: [
+          { ratio: 0,    color: "rgba(244,178,62,0)" },
+          { ratio: 0.2,  color: "rgba(244,178,62,0.5)" },
+          { ratio: 0.5,  color: "rgba(244,140,40,0.75)" },
+          { ratio: 0.8,  color: "rgba(240,100,90,0.85)" },
+          { ratio: 1,    color: "rgba(240,80,80,0.95)" }
+        ]
+      }),
+      popupTemplate: { title: "Demand cell {h3_cell}", content:
+        "Homes passed: {homes_passed}<br>Business locations: {biz_count}<br>" +
+        "Avg ARPU: ${avg_arpu}<br>Est. build cost: ${est_build_cost_usd}" }
+    },
+    sectors: {   // derived from antennas' sector geometry
+      geometryType: "polygon",
+      fields: [{ name: "sys_id", type: "string" }],
+      renderer: { type: "simple", symbol: { type: "simple-fill",
+        color: SECTOR_FILL, outline: { color: SECTOR_LINE, width: 1 } } },
+      popupTemplate: null
+    },
+    cables: {
+      geometryType: "polyline",
+      fields: [
+        { name: "cable_id", type: "string" }, { name: "cable_type", type: "string" },
+        { name: "fiber_count", type: "integer" }, { name: "length_m", type: "double" }
+      ],
+      renderer: { type: "unique-value", field: "cable_type", uniqueValueInfos: [
+        { value: "trunk", symbol: lineSym([246,166,35], 2.4) },
+        { value: "distribution", symbol: lineSym([74,163,255], 1.6) }
+      ], defaultSymbol: lineSym([120,140,170], 1.4) },
+      popupTemplate: { title: "Cable {cable_id}", content:
+        "Type: {cable_type}<br>Fiber count: {fiber_count}<br>Length: {length_m} m" }
+    },
+    sites: {
+      geometryType: "point",
+      fields: [
+        { name: "structure_sys_id", type: "string" }, { name: "site_type", type: "string" },
+        { name: "height_m", type: "double" }
+      ],
+      renderer: { type: "simple", symbol: markerSym([64,224,168], 7, "triangle") },
+      popupTemplate: { title: "Site {structure_sys_id}", content:
+        "Type: {site_type}<br>Height: {height_m} m" }
+    },
+    nodes: {
+      geometryType: "point",
+      fields: [
+        { name: "node_id", type: "string" }, { name: "node_type", type: "string" },
+        { name: "status", type: "string" }
+      ],
+      renderer: { type: "unique-value", field: "status", uniqueValueInfos: [
+        { value: "active", symbol: markerSym([56,232,176], 6, "circle") },
+        { value: "fault", symbol: markerSym([240,100,90], 7, "circle") }
+      ], defaultSymbol: markerSym([143,163,191], 6, "circle") },
+      popupTemplate: { title: "Node {node_id}", content:
+        "Type: {node_type}<br>Status: {status}" }
+    },
+    antennas: {
+      geometryType: "point",
+      fields: [
+        { name: "sys_id", type: "string" }, { name: "structure_sys_id", type: "string" },
+        { name: "radio_band", type: "string" }, { name: "carrier_number", type: "integer" },
+        { name: "azimuth", type: "double" }, { name: "h_beamwidth", type: "double" },
+        { name: "mech_tilt", type: "double" }, { name: "elec_tilt", type: "double" }
+      ],
+      renderer: { type: "simple", symbol: markerSym([190,150,255], 6, "diamond") },
+      popupTemplate: { title: "{sys_id}", content: [{ type: "fields", fieldInfos: [
+        { fieldName: "radio_band", label: "Radio band" },
+        { fieldName: "carrier_number", label: "Carrier number" },
+        { fieldName: "azimuth", label: "Azimuth" },
+        { fieldName: "h_beamwidth", label: "Horizontal beam width" },
+        { fieldName: "mech_tilt", label: "Mechanical down tilt" },
+        { fieldName: "elec_tilt", label: "Electrical down tilt" },
+        { fieldName: "structure_sys_id", label: "Structure Sys ID" }
+      ]}]}
+    }
+  };
+
+  function lineSym(c, w){ return { type: "simple-line", color: c, width: w }; }
+  function markerSym(c, size, style){ return { type: "simple-marker", style, size,
+    color: [...c, 0.9], outline: { color: [10,18,32,0.6], width: 0.5 } }; }
+
+  // Build one FeatureLayer per layer up-front (empty), then feed features on refresh.
+  let uid = 1;
+  const featureLayers = {};
+  const OFF_BY_DEFAULT = ["sectors", "demand"];  // toggled on demand
+  // draw order bottom->top: demand heatmap, cables, sectors, sites, nodes, antennas
+  ["demand", "cables", "sectors", "sites", "nodes", "antennas"].forEach(name => {
+    const def = LAYERS[name];
+    const fl = new FeatureLayer({
+      source: [], objectIdField: "oid",
+      fields: [{ name: "oid", type: "oid" }, ...def.fields],
+      geometryType: def.geometryType, spatialReference: { wkid: 4326 },
+      renderer: def.renderer, popupTemplate: def.popupTemplate,
+      popupEnabled: def.popupTemplate != null,
+      visible: !OFF_BY_DEFAULT.includes(name)
+    });
+    featureLayers[name] = fl;
+    map.add(fl);
+  });
+  map.add(genieLayer);
+  map.reorder(drawLayer, 98);
+  map.reorder(genieLayer, 99);   // on top: results sit above the selection fill
+
+  // Sectors toggle — off by default so the assets underneath stay readable.
+  const sectorBtn = document.getElementById("sectorBtn");
+  sectorBtn.onclick = () => {
+    const fl = featureLayers.sectors;
+    fl.visible = !fl.visible;
+    sectorBtn.classList.toggle("active", fl.visible);
+    sectorBtn.textContent = "Sectors: " + (fl.visible ? "on" : "off");
+  };
+
+  async function applyEdits(name, graphics) {
+    const fl = featureLayers[name];
+    const existing = await fl.queryFeatures();
+    await fl.applyEdits({
+      deleteFeatures: existing.features,
+      addFeatures: graphics
+    });
+  }
+
+  async function refreshAssets() {
+    if (view.zoom < 11) return;  // avoid dumping the whole metro
+    const e = wmUtils.webMercatorToGeographic(view.extent);
+    const qs = new URLSearchParams({ north: e.ymax, south: e.ymin, east: e.xmax, west: e.xmin });
+
+    // Fetch the four backend layers; antennas also seed the sectors layer.
+    for (const name of ["cables", "sites", "nodes", "antennas"]) {
+      try {
+        const res = await fetch(`/api/features/${name}?${qs}`);
+        if (!res.ok) continue;
+        const fc = await res.json();
+        const graphics = fc.features.map(f => new Graphic({
+          geometry: toEsriGeometry(f.geometry),
+          attributes: { oid: uid++, ...pickAttrs(name, f.properties) }
+        }));
+        await applyEdits(name, graphics);
+        if (name === "antennas") {
+          const sectors = fc.features
+            .filter(f => f.properties.sector)
+            .map(f => new Graphic({
+              geometry: toEsriGeometry(f.properties.sector),
+              attributes: { oid: uid++, sys_id: f.properties.sys_id }
+            }));
+          await applyEdits("sectors", sectors);
+        }
+      } catch (_) { /* best-effort per layer */ }
+    }
+  }
+
+  // Demand heatmap is fetched separately (larger payload) and only when visible.
+  async function refreshDemand() {
+    if (!featureLayers.demand.visible || view.zoom < 11) return;
+    const e = wmUtils.webMercatorToGeographic(view.extent);
+    const qs = new URLSearchParams({ north: e.ymax, south: e.ymin, east: e.xmax, west: e.xmin });
+    try {
+      const res = await fetch(`/api/features/demand?${qs}`);
+      if (!res.ok) return;
+      const fc = await res.json();
+      const graphics = fc.features.map(f => new Graphic({
+        geometry: toEsriGeometry(f.geometry),
+        attributes: { oid: uid++, ...pickAttrs("demand", f.properties) }
+      }));
+      await applyEdits("demand", graphics);
+    } catch (_) { /* best-effort */ }
+  }
+
+  function pickAttrs(name, props) {
+    const out = {};
+    LAYERS[name].fields.forEach(fld => { out[fld.name] = props[fld.name]; });
+    return out;
+  }
+
+  // GeoJSON geometry -> ESRI geometry (lon/lat, wkid 4326)
+  function toEsriGeometry(g) {
+    if (g.type === "Point") return { type: "point", longitude: g.coordinates[0], latitude: g.coordinates[1], spatialReference: { wkid: 4326 } };
+    if (g.type === "LineString") return { type: "polyline", paths: [g.coordinates], spatialReference: { wkid: 4326 } };
+    if (g.type === "Polygon") return { type: "polygon", rings: g.coordinates, spatialReference: { wkid: 4326 } };
+    return null;
+  }
+
+  reactiveUtils.when(() => view.stationary === true, () => { refreshAssets(); refreshDemand(); });
+
+  // On first load, frame the view to the actual network extent so the data fills
+  // the screen regardless of where the (seeded-random) corridors landed. Queries a
+  // wide bbox for all sites, computes their bounds, and zooms to fit with padding.
+  async function fitToNetwork() {
+    try {
+      const qs = new URLSearchParams({ north: 90, south: -90, east: 180, west: -180 });
+      const res = await fetch(`/api/features/sites?${qs}`);
+      if (!res.ok) return;
+      const fc = await res.json();
+      if (!fc.features.length) return;
+      let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
+      for (const f of fc.features) {
+        const [x, y] = f.geometry.coordinates;
+        if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+      }
+      // ~8% margin around the network so points aren't flush against the edges.
+      const mx = (xmax - xmin) * 0.08 || 0.01, my = (ymax - ymin) * 0.08 || 0.01;
+      await view.goTo(new Extent({
+        xmin: xmin - mx, ymin: ymin - my, xmax: xmax + mx, ymax: ymax + my,
+        spatialReference: { wkid: 4326 }
+      }), { animate: false });
+    } catch (_) { /* fall back to the default center/zoom */ }
+  }
+
+  view.when(async () => { await fitToNetwork(); refreshAssets(); });
+
+  // ---------------- Draw-to-analyze mode ----------------
+  const svm = new SketchViewModel({ view, layer: drawLayer,
+    polygonSymbol: { type: "simple-fill", color: [56,232,176,0.14],
+      outline: { color: [56,232,176,1], width: 2 } } });
+
+  const btn = document.getElementById("drawBtn");
+  const label = document.getElementById("drawLabel");
+  const hint = document.getElementById("hint");
+  const panel = document.getElementById("panel");
+  let drawing = false;
+
+  btn.onclick = () => {
+    if (drawing) { svm.cancel(); return resetBtn(); }
+    drawLayer.removeAll();
+    svm.create("polygon", { mode: "freehand" });
+    drawing = true; btn.classList.add("active");
+    label.textContent = "Cancel"; hint.classList.add("show");
+  };
+
+  svm.on("create", async (ev) => {
+    if (ev.state === "cancel") return resetBtn();
+    if (ev.state !== "complete") return;
+    resetBtn();
+    const geo = wmUtils.webMercatorToGeographic(ev.graphic.geometry);
+    const ring = geo.rings[0].map(([x, y]) => [ +x.toFixed(6), +y.toFixed(6) ]);
+    if (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]) ring.push(ring[0]);
+    const polygon = { type: "Polygon", coordinates: [ring] };
+    updateRegionScope(ring);   // convert to H3 for Genie
+    await runAnalysis(polygon);
+  });
+
+  function resetBtn() {
+    drawing = false; btn.classList.remove("active");
+    label.textContent = "Draw area"; hint.classList.remove("show");
+  }
+
+  // Convert the drawn ring to both scope representations for Genie.
+  function updateRegionScope(ring) {
+    try {
+      // h3-js polygonToCells expects [lat, lng] pairs.
+      const latLng = ring.map(([lon, lat]) => [lat, lon]);
+      regionH3 = h3.polygonToCells(latLng, 9);
+    } catch (err) {
+      console.error("H3 region conversion failed:", err);
+      regionH3 = null;
+    }
+    // WKT for the exact ST_Contains path: "POLYGON((lon lat, lon lat, ...))"
+    regionWKT = "POLYGON((" + ring.map(([lon, lat]) => `${lon} ${lat}`).join(", ") + "))";
+    const scope = document.getElementById("genieScope");
+    scope.innerHTML = regionH3 && regionH3.length
+      ? `Scope: <b>drawn area</b> (${regionH3.length} H3 cells). Questions are restricted to it.`
+      : `Scope: <b>whole map</b> — draw an area to scope questions to it.`;
+  }
+
+  const fmt$ = v => v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const fmtN = v => v == null ? "—" : Number(v).toLocaleString();
+  const fmtP = v => v == null ? "—" : (100 * v).toFixed(1) + "%";
+
+  async function runAnalysis(geojson) {
+    panel.classList.add("show");
+    document.getElementById("tier").textContent = "…";
+    document.getElementById("tier").className = "";
+    document.getElementById("coverage").textContent = "";
+    document.getElementById("metrics").innerHTML = "";
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ geojson })
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.status);
+      renderResult(await res.json());
+    } catch (e) {
+      document.getElementById("tier").textContent = "Error";
+      document.getElementById("metrics").innerHTML =
+        `<div class="row"><span>${String(e).slice(0,140)}</span></div>`;
+    }
+  }
+
+  function renderResult(d) {
+    const tier = document.getElementById("tier");
+    tier.textContent = ({BUILD:"Build it", MARGINAL:"Marginal", PASS:"Pass", NO_DATA:"No demand here"})[d.roi_tier] || d.roi_tier;
+    tier.className = d.roi_tier;
+
+    document.getElementById("coverage").textContent =
+      (d.total_hexes != null)
+        ? `${fmtN(d.covered_hexes)} of ${fmtN(d.total_hexes)} cells already covered by existing sectors — ROI on the ${fmtN(d.uncovered_hexes)} uncovered`
+        : "";
+
+    const rows = [
+      ["Homes passed (uncovered)", fmtN(d.homes_passed_uncovered)],
+      ["Business locations", fmtN(d.biz_count)],
+      ["Projected take rate", fmtP(d.projected_take_rate)],
+      ["Projected subscribers", fmtN(d.projected_subs)],
+      ["Total capex", fmt$(d.total_capex_usd)],
+      ["Annual revenue", fmt$(d.annual_revenue_usd)],
+      ["5-yr ROI", d.five_yr_roi_pct == null ? "—" : d.five_yr_roi_pct + "%"],
+      ["Payback", d.payback_months == null ? "—" : d.payback_months + " mo"],
+    ];
+    document.getElementById("metrics").innerHTML =
+      rows.map(([k,v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("");
+
+    if (d.roi_tier && drawLayer.graphics.length) {
+      const color = { BUILD:[56,232,176], MARGINAL:[244,178,62], PASS:[240,100,90] }[d.roi_tier] || [143,163,191];
+      const g = drawLayer.graphics.getItemAt(0);
+      g.symbol = { type: "simple-fill", color: [...color, 0.18], outline: { color: [...color, 1], width: 2.5 } };
+    }
+  }
+
+  // ---------------- Genie chat panel ----------------
+  const genieBtn = document.getElementById("genieBtn");
+  const geniePanel = document.getElementById("genie");
+  const genieLog = document.getElementById("genieLog");
+  const genieForm = document.getElementById("genieForm");
+  const genieInput = document.getElementById("genieInput");
+
+  genieBtn.onclick = () => {
+    const show = !geniePanel.classList.contains("show");
+    geniePanel.classList.toggle("show", show);
+    genieBtn.classList.toggle("active", show);
+    if (show) genieInput.focus();
+  };
+
+  // ---- Clickable sample questions (great for demos) ----
+  // Each carries a scope mode so we can showcase BOTH region-scoping paths:
+  //   "st" — exact point-in-polygon via the warehouse's native ST_* functions
+  //   "h3" — approximate via `h3_cell IN (...)`
+  // Point assets (antennas/sites/nodes) use the exact ST_* path; demand/H3
+  // questions use the H3 path. Kept ~50/50 to demonstrate Databricks does both.
+  const SAMPLE_QUESTIONS = [
+    { q: "How many antennas are here, by radio band?",       mode: "st" },
+    { q: "List sites here that are towers vs rooftops, with coordinates", mode: "st" },
+    { q: "How many nodes here are in a fault state?",        mode: "st" },
+    { q: "Which H3 cells here have the highest average ARPU?", mode: "h3" },
+    { q: "Show demand cells here with over 40 homes passed", mode: "h3" },
+    { q: "Total homes passed across demand cells here",      mode: "h3" }
+  ];
+  // Which scope path the next question uses. A clicked chip sets this to its
+  // mode; null means "not set by a chip" so a free-typed question infers the
+  // mode from its wording (see inferScopeMode).
+  let nextScopeMode = null;
+
+  // Infer the scope path for a free-typed question. Default is H3 (approximate,
+  // the SQL an LLM generates most reliably); switch to the exact ST_* path only
+  // when the wording asks for coordinates / precision. Keyword heuristic — not
+  // NLP; the clickable chips carry an explicit mode for the reliable demo path.
+  function inferScopeMode(text) {
+    return /\b(coord|coordinate|coordinates|lat|latitude|lon|long|longitude|exact|exactly|precise|precisely|point[- ]in[- ]polygon)\b/i
+      .test(text) ? "st" : "h3";
+  }
+  const genieSamples = document.getElementById("genieSamples");
+  SAMPLE_QUESTIONS.forEach(({ q, mode }) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "sample sample-" + mode;
+    chip.innerHTML = `<span class="sample-badge">${mode === "st" ? "Coord" : "H3"}</span>` + esc(q);
+    chip.onclick = () => { nextScopeMode = mode; genieInput.value = q; genieForm.requestSubmit(); };
+    genieSamples.appendChild(chip);
+  });
+
+  // Escape untrusted text before we inject any of our own markup.
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // Render Genie's answer: **bold**, GitHub-style markdown tables, and newlines.
+  function renderAnswer(text) {
+    const lines = text.split("\n");
+    let html = "", i = 0;
+    const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+    while (i < lines.length) {
+      const isTableRow = l => /^\s*\|.*\|\s*$/.test(l);
+      const isDivider  = l => /^\s*\|?[\s:|-]+\|?\s*$/.test(l) && l.includes("-");
+      if (isTableRow(lines[i]) && i + 1 < lines.length && isDivider(lines[i + 1])) {
+        const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+        const head = cells(lines[i]); i += 2;
+        let rows = "";
+        while (i < lines.length && isTableRow(lines[i])) {
+          rows += "<tr>" + cells(lines[i]).map(c => `<td>${inline(c)}</td>`).join("") + "</tr>";
+          i++;
+        }
+        html += "<table><thead><tr>" + head.map(h => `<th>${inline(h)}</th>`).join("") +
+                "</tr></thead><tbody>" + rows + "</tbody></table>";
+      } else {
+        if (lines[i].trim()) html += `<div class="ai-text">${inline(lines[i])}</div>`;
+        i++;
+      }
+    }
+    return html;
+  }
+
+  // Render a Genie query result (columns + rows) as an HTML table.
+  function renderTable(table) {
+    if (!table || !table.columns || !table.columns.length || !table.rows) return "";
+    const MAX = 50;
+    const rows = table.rows.slice(0, MAX);
+    const head = "<tr>" + table.columns.map(c => `<th>${esc(c)}</th>`).join("") + "</tr>";
+    const body = rows.map(r =>
+      "<tr>" + r.map(cell => `<td>${cell == null ? "" : esc(cell)}</td>`).join("") + "</tr>"
+    ).join("");
+    let note = "";
+    if (table.rows.length > MAX) note = `<div class="ai-text" style="color:var(--muted);font-size:11.5px">Showing first ${MAX} of ${table.rows.length} rows.</div>`;
+    else if (table.truncated) note = `<div class="ai-text" style="color:var(--muted);font-size:11.5px">Result truncated by Genie.</div>`;
+    return `<table><thead>${head}</thead><tbody>${body}</tbody></table>${note}`;
+  }
+
+  // Render a Genie-produced visualization (base64 PNG data URI) as an image.
+  function renderChart(chart) {
+    if (!chart) return "";
+    return `<img class="ai-chart" src="${esc(chart)}" alt="Genie visualization" />`;
+  }
+
+  // ---- Native rendering of Genie's *geographic* results on the ESRI map ----
+  // Backend sets is_map=true when the result carries lat/lon or an H3 column.
+  // Genie's own server-rendered map PNG drops its basemap tiles, so instead of
+  // that blank image we draw the rows here on the app's ArcGIS basemap.
+
+  // Column-name detection, kept in sync with genie.py's _result_is_geographic.
+  const LAT_COLS = ["lat","latitude","cell_lat","site_lat"];
+  const LON_COLS = ["lon","lng","long","longitude","cell_lon","site_lon"];
+  const findCol = (cols, cands) => cols.findIndex(c => cands.includes(c.toLowerCase()));
+  const findH3Col = cols => cols.findIndex(c => { const l = c.toLowerCase(); return l.includes("h3") || l.includes("hex"); });
+
+  // Two-stop blue ramp (matches Genie's homes_passed styling); t in [0,1].
+  function rampColor(t) {
+    const lo = [219,234,254], hi = [30,64,175];   // light -> deep blue
+    const c = lo.map((v, k) => Math.round(v + (hi[k] - v) * t));
+    return [...c, 0.92];
+  }
+
+  // On-brand categorical palette (mirrors the app's accent CSS vars), used when
+  // a result is colored by a text category (e.g. site_type tower vs rooftop).
+  const CAT_COLORS = [
+    [74,163,255], [244,178,62], [56,232,176], [177,140,255],
+    [240,100,90], [143,163,191], [246,166,35], [130,200,255]
+  ];
+
+  // Draw a geographic Genie result on genieLayer and zoom to it. Returns
+  // {n, legend} — n features drawn (0 if unusable), legend = HTML for the note.
+  function renderGenieMap(table) {
+    genieLayer.removeAll();
+    if (!table || !table.columns || !table.rows || !table.rows.length) return { n: 0, legend: "" };
+    const cols = table.columns;
+    const latI = findCol(cols, LAT_COLS), lonI = findCol(cols, LON_COLS);
+    const h3I = findH3Col(cols);
+    const hasPts = latI !== -1 && lonI !== -1;
+    if (!hasPts && h3I === -1) return { n: 0, legend: "" };
+
+    // Decide how to color, matching what Genie itself tends to pick:
+    //   1. a low-cardinality TEXT category (site_type, status, …) -> distinct colors
+    //   2. else a NUMERIC measure (homes_passed, avg_arpu, …)     -> blue gradient
+    //   3. else flat. A legend is always emitted so the color is never a mystery.
+    const geomIdx = new Set([latI, lonI, h3I].filter(i => i !== -1));
+    const isNumCol = i => {
+      const vals = table.rows.map(r => r[i]).filter(v => v != null && v !== "");
+      return vals.length > 0 && vals.every(v => !isNaN(Number(v)));
+    };
+    let catI = -1, numI = -1;
+    for (let i = 0; i < cols.length; i++) {
+      if (geomIdx.has(i) || isNumCol(i)) continue;
+      const distinct = new Set(table.rows.map(r => r[i] == null ? "∅" : String(r[i])));
+      if (distinct.size >= 2 && distinct.size <= 8) { catI = i; break; }
+    }
+    if (catI === -1) {
+      for (let i = 0; i < cols.length; i++) {
+        if (geomIdx.has(i)) continue;
+        if (isNumCol(i)) { numI = i; break; }
+      }
+    }
+
+    // Build the per-row color function + a legend for the note.
+    let colorFor, legend = "";
+    if (catI !== -1) {
+      // Plain object, not `new Map()` — the ArcGIS `Map` module shadows the
+      // global Map constructor inside this require() callback.
+      const catColors = {};
+      const catOrder = [];
+      for (const r of table.rows) {
+        const key = r[catI] == null ? "∅" : String(r[catI]);
+        if (!(key in catColors)) {
+          catColors[key] = CAT_COLORS[catOrder.length % CAT_COLORS.length];
+          catOrder.push(key);
+        }
+      }
+      colorFor = r => (catColors[r[catI] == null ? "∅" : String(r[catI])] || [143,163,191]).concat(0.92);
+      legend = `<div class="genie-legend"><b>${esc(cols[catI])}:</b>` +
+        catOrder.map(val => { const c = catColors[val];
+          return `<span class="lg"><i style="background:rgb(${c[0]},${c[1]},${c[2]})"></i>${esc(val)}</span>`; }).join("") +
+        `</div>`;
+    } else if (numI !== -1) {
+      let mMin = Infinity, mMax = -Infinity;
+      for (const r of table.rows) { const v = Number(r[numI]);
+        if (!isNaN(v)) { if (v < mMin) mMin = v; if (v > mMax) mMax = v; } }
+      const norm = v => (mMax === mMin) ? 0.65 : (Number(v) - mMin) / (mMax - mMin);
+      colorFor = r => rampColor(norm(r[numI]));
+      const fmt = v => Number.isFinite(v) ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }) : "—";
+      legend = `<div class="genie-legend"><b>${esc(cols[numI])}</b>` +
+        `<span class="lg-ramp"></span>${fmt(mMin)} – ${fmt(mMax)}</div>`;
+    } else {
+      colorFor = () => rampColor(0.65);
+    }
+
+    const popupFields = (r) => cols.map((c, i) => `${esc(c)}: ${r[i] == null ? "" : esc(r[i])}`).join("<br>");
+    const titleI = catI !== -1 ? catI : numI;
+    const graphics = [];
+    // Track the geographic bounds of the results so we can decide whether the
+    // view needs to move (see below).
+    let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
+    const grow = (lon, lat) => { if (lon < xmin) xmin = lon; if (lon > xmax) xmax = lon;
+                                 if (lat < ymin) ymin = lat; if (lat > ymax) ymax = lat; };
+    for (const r of table.rows) {
+      const color = colorFor(r);
+      const popup = { title: titleI !== -1 && titleI != null ? `${esc(cols[titleI])}: ${esc(r[titleI])}` : "Result", content: popupFields(r) };
+      if (hasPts) {
+        const lat = Number(r[latI]), lon = Number(r[lonI]);
+        if (isNaN(lat) || isNaN(lon)) continue;
+        grow(lon, lat);
+        graphics.push(new Graphic({
+          geometry: { type: "point", longitude: lon, latitude: lat, spatialReference: { wkid: 4326 } },
+          // Larger than base markers with a bright white ring so answers read
+          // as a distinct result set on top of the assets + selection fill.
+          symbol: { type: "simple-marker", style: "circle", size: 14, color,
+            outline: { color: [255,255,255,0.95], width: 2 } },
+          popupTemplate: popup
+        }));
+      } else {
+        // H3 cell -> hexagon boundary via h3-js (returns [lat, lng] pairs).
+        let boundary;
+        try { boundary = h3.cellToBoundary(String(r[h3I])); } catch (_) { continue; }
+        if (!boundary || !boundary.length) continue;
+        const ring = boundary.map(([la, lo]) => [lo, la]);
+        ring.push(ring[0]);
+        for (const [lo, la] of ring) grow(lo, la);
+        graphics.push(new Graphic({
+          geometry: { type: "polygon", rings: [ring], spatialReference: { wkid: 4326 } },
+          symbol: { type: "simple-fill", color: color.slice(0,3).concat(0.6),
+            outline: { color: [255,255,255,0.9], width: 1.5 } },
+          popupTemplate: popup
+        }));
+      }
+    }
+    if (!graphics.length) return { n: 0, legend: "" };
+    genieLayer.addMany(graphics);
+
+    // Only reframe if the results aren't already comfortably in view — moving
+    // the map is jarring when you've just drawn a region the answers sit inside.
+    // Compare result bounds against the current (geographic) view extent; if
+    // they fall within it, stay put. Otherwise go to the results.
+    if (Number.isFinite(xmin)) {
+      let inView = false;
+      try {
+        const e = wmUtils.webMercatorToGeographic(view.extent);
+        inView = xmin >= e.xmin && xmax <= e.xmax && ymin >= e.ymin && ymax <= e.ymax;
+      } catch (_) { /* if we can't tell, fall through and reframe */ }
+      if (!inView) {
+        view.goTo({ target: graphics, options: { animate: true } }).catch(() => {});
+      }
+    }
+    return { n: graphics.length, legend };
+  }
+
+  function clearGenieLayer() { genieLayer.removeAll(); }
+
+  function addMsg(cls, text, sql, table, chart, isMap) {
+    const div = document.createElement("div");
+    div.className = "msg " + cls;
+    if (cls === "ai") {
+      // Geographic results render on the ESRI map, not as a PNG. If they turn
+      // out not to be plottable, note that rather than showing nothing.
+      let mapNote = "", plotted = 0;
+      if (isMap) {
+        const res = renderGenieMap(table);
+        plotted = res.n;
+        mapNote = plotted
+          ? `<div class="ai-text" style="color:var(--muted);font-size:11.5px">📍 ${plotted} result${plotted === 1 ? "" : "s"} plotted on the map. <span class="clear-genie" role="button" tabindex="0">Clear</span></div>${res.legend}`
+          : "";
+      }
+      div.innerHTML = renderAnswer(text) + renderTable(table) + mapNote + renderChart(chart);
+      if (plotted) {
+        // "Clear" removes the plotted results from the map and disables the link.
+        const clear = div.querySelector(".clear-genie");
+        const doClear = () => { clearGenieLayer(); clear.classList.add("done"); clear.textContent = "Cleared"; };
+        clear.onclick = doClear;
+        clear.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); doClear(); } };
+      }
+      if (sql) {
+        const toggle = document.createElement("div");
+        toggle.className = "sql-toggle";
+        toggle.textContent = "View SQL";
+        const pre = document.createElement("pre");
+        pre.textContent = sql;
+        toggle.onclick = () => {
+          const open = pre.classList.toggle("show");
+          toggle.classList.toggle("open", open);
+          toggle.textContent = (open ? "Hide SQL" : "View SQL");
+        };
+        div.appendChild(toggle);
+        div.appendChild(pre);
+      }
+    } else {
+      div.textContent = text;
+    }
+    genieLog.appendChild(div);
+    genieLog.scrollTop = genieLog.scrollHeight;
+    return div;
+  }
+
+  genieForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const prompt = genieInput.value.trim();
+    if (!prompt) return;
+    // A clicked chip pins the mode; a free-typed question infers it from wording.
+    const mode = nextScopeMode || inferScopeMode(prompt);
+    nextScopeMode = null;          // reset so the next free-typed question re-infers
+    addMsg("you", prompt);
+    genieInput.value = "";
+    const thinking = addMsg("ai", "Thinking…");
+    try {
+      const res = await fetch("/api/genie", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt, scope_mode: mode,
+          h3_cells: regionH3, polygon_wkt: regionWKT
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || res.status);
+      // Build the answer first; only drop "Thinking…" once it succeeds, so a
+      // render error stays visible on the still-attached thinking node.
+      addMsg("ai", data.answer || "(no answer)", data.sql, data.table, data.chart, data.is_map);
+      thinking.remove();
+    } catch (err) {
+      console.error("Genie render failed:", err);
+      thinking.textContent = "Error: " + String(err && err.stack || err).slice(0, 300);
+    }
+  };
+});
+</script>
+</body>
+</html>
