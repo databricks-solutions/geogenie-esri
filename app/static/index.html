@@ -470,9 +470,19 @@ require([
     // WKT for the exact ST_Contains path: "POLYGON((lon lat, lon lat, ...))"
     regionWKT = "POLYGON((" + ring.map(([lon, lat]) => `${lon} ${lat}`).join(", ") + "))";
     const scope = document.getElementById("genieScope");
-    scope.innerHTML = regionH3 && regionH3.length
-      ? `Scope: <b>drawn area</b> (${regionH3.length} H3 cells). Questions are restricted to it.`
-      : `Scope: <b>whole map</b> — draw an area to scope questions to it.`;
+    if (regionH3 && regionH3.length) {
+      // The drawn area supports both scope paths; which one a question uses is
+      // chosen per question (see inferScopeMode). Show both, with their real
+      // counts, so a planner can see the exact geographic boundary behind an
+      // answer before acting on it.
+      const vtx = Math.max(0, ring.length - 1);   // ring is closed; last pt == first
+      scope.innerHTML =
+        `Scope: <b>drawn area</b>, restricted to it by approximate H3 ` +
+        `(${regionH3.length} cells) or exact ST_Contains (${vtx}-vertex polygon), ` +
+        `depending on the question.`;
+    } else {
+      scope.innerHTML = `Scope: <b>whole map</b>. Draw an area to scope questions to it.`;
+    }
   }
 
   const fmt$ = v => v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
